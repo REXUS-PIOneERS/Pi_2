@@ -7,7 +7,7 @@ CC = g++
 OBJS = ./build/main.o ./build/RPi_IMU.o ./build/camera.o ./build/UART.o ./build/Ethernet.o
 LFLAGS = -Wall
 CFLAGS = -Wall -c -std=c++11
-INCLUDES = -lwiringPi -I/home/pi/Pi_1/src
+INCLUDES = -lwiringPi -I/home/pi/Pi_2/src
 
 MAINSRC = ./src/main.cpp
 IMUSRC = ./src/RPi_IMU/RPi_IMU.cpp
