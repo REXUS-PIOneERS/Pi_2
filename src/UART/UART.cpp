@@ -13,7 +13,7 @@
 
 void UART::setupUART() {
 	//Open the UART in non-blocking read/write mode
-	uart_filestream = open("/dev/serial0", O_RDWR | O_NOCTTY | O_NDELAY);
+	uart_filestream = open("/dev/serial0", O_RDWR | O_NOCTTY);
 	if (uart_filestream == -1) {
 		//ERROR: Failed to open serial port!
 		fprintf(stderr, "Error: unable to open serial port. Ensure it is correctly set up\n");
@@ -81,11 +81,11 @@ int UART::startDataCollection(std::string filename) {
 					int n = read(uart_filestream, buf, 256);
 					if (n > 0) {
 						buf[n] = '\0';
+						write(dataPipe[1], buf, n);
+						outf << buf << "\n";
 						break;
 					}
 				}
-				write(dataPipe[1], buf, strlen(buf));
-				outf << buf;
 				// Restrict measurements to required rate
 				while (tmr.elapsed() < intv) {
 					std::this_thread::sleep_for(std::chrono::milliseconds(10));

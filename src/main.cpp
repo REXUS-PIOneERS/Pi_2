@@ -71,15 +71,19 @@ int SOE_SIGNAL() {
 	// Trigger the burn wire!
 	digitalWrite(BURNWIRE, 1);
 	unsigned int start = millis();
-	while ((millis() - start) < 6000) {
-		char buf[256];
+	while (1) {
+		unsigned int time = millis() - start;
+		fprintf(stdout, "Burn wire on for %d ms\n", time);
+		if (time > 6000) break;
 		int n = read(ImP_data_stream, buf, 255);
 		if (n > 0) {
 			buf[n] = '\0';
 			fprintf(stdout, "DATA: %s\n", buf);
 			write(ethernet_streams[1], buf, n);
 		}
+		delay(100);
 	}
+	digitalWrite(BURNWIRE, 0);
 
 	// Wait for the next signal to continue the program
 	while (digitalRead(SODS)) {
@@ -139,7 +143,7 @@ int main() {
 	fprintf(stdout, "Pi 2 is alive and running.\n");
 
 	// Setup server and wait for client
-	digitalWrite(ALIVE, 1)
+	digitalWrite(ALIVE, 1);
 	ethernet_comms.run(ethernet_streams);
 	fprintf(stdout, "Waiting for LO signal...\n");
 
