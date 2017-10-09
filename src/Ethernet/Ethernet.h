@@ -11,10 +11,14 @@
  * Created on 05 September 2017, 19:05
  */
 #include <string>
+#include <cstring>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <error.h>  // For errno
+
+#include "pipes/pipes.h"
 
 #ifndef ETHERNET_H
 #define ETHERNET_H
@@ -22,7 +26,7 @@
 class Server {
 public:
 	Server(int port);
-	int run(int *pipes);
+	Pipe run();
 	~Server();
 private:
 	int m_sockfd, m_newsockfd, m_port, m_pid;
@@ -40,7 +44,7 @@ class Client {
 public:
 	Client(int port, std::string host_name);
 
-	int run(int *pipes);
+	Pipe run();
 	int open_connection();
 	int close_connection();
 	~Client();
@@ -54,6 +58,22 @@ private:
 	int send_packet(std::string packet);
 	std::string receive_packet();
 	int setup();
+};
+
+class EthernetException {
+public:
+
+	EthernetException(std::string error) {
+		m_error = error + std::strerror(errno);
+	}
+
+	const char * what() {
+		return m_error.c_str();
+	}
+
+private:
+
+	std::string m_error;
 };
 
 #endif /* ETHERNET_H */

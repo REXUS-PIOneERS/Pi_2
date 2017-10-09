@@ -7,13 +7,13 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 #include "UART.h"
-#include <RPi_IMU/timer.h>
 #include <fstream>
-#include <string.h>
+#include <string>
+#include "pipes/pipes.h"
 
 void UART::setupUART() {
 	//Open the UART in non-blocking read/write mode
-	uart_filestream = open("/dev/serial0", O_RDWR | O_NOCTTY);
+	uart_filestream = open("/dev/serial0", O_RDWR | O_NOCTTY | O_NDELAY);
 	if (uart_filestream == -1) {
 		//ERROR: Failed to open serial port!
 		fprintf(stderr, "Error: unable to open serial port. Ensure it is correctly set up\n");
@@ -29,8 +29,8 @@ void UART::setupUART() {
 	tcsetattr(uart_filestream, TCSANOW, &options);
 }
 
-int UART::sendBytes(char *buf, size_t count) {
-	int sent = write(uart_filestream, (void*) buf, count);
+int UART::sendBytes(char *buf, int n) {
+	int sent = write(uart_filestream, (void*) buf, n);
 	if (sent < 0) {
 		fprintf(stderr, "Failed to send bytes");
 		return -1;
@@ -38,11 +38,11 @@ int UART::sendBytes(char *buf, size_t count) {
 	return 0;
 }
 
-int UART::getBytes(char buf[256]) {
+int UART::getBytes(char* buf, int n) {
 	/*
 	 * Gets bytes that are waiting in the UART stream (max 255 bytes)
 	 */
-	int buf_length = read(uart_filestream, (void*) buf, 255);
+	int buf_length = read(uart_filestream, buf, n);
 	if (buf_length < 0) {
 		fprintf(stderr, "Error: Unable to read bytes");
 		return -1;
@@ -53,51 +53,50 @@ int UART::getBytes(char buf[256]) {
 		return buf_length;
 }
 
-int UART::startDataCollection(std::string filename) {
+Pipe UART::startDataCollection(std::string filename) {
 	/*
 	 * Sends request to the ImP to begin sending data. Returns the file stream
 	 * to the main program and continually writes the data to this stream.
 	 */
-	int dataPipe[2];
-	pipe(dataPipe);
-
-	if ((m_pid = fork()) == 0) {
-		// This is the child process
-		close(dataPipe[0]); // Not needed
-		// Infinite loop for data collection
-		for (int j = 0;; j++) {
-			std::ofstream outf;
-			char unique_file[50];
-			sprintf(unique_file, "%s%04d.txt", filename.c_str(), j);
-			outf.open(unique_file);
-			sendBytes("C", 1);
-			// Take five measurements then change the file
-			double intv = 0.2;
-			for (int i = 0; i < 5; i++) {
-				Timer tmr;
-				char buf[256];
-				// Wait for data to come through
-				while (1) {
-					int n = read(uart_filestream, buf, 256);
-					if (n > 0) {
-						buf[n] = '\0';
-						write(dataPipe[1], buf, n);
-						outf << buf << "\n";
-						break;
+	try {
+		Pipe pipes = Pipe();
+		if ((m_pid = pipes.Fork()) == 0) {
+			// This is the child process
+			// Infinite loop for data collection
+			for (int j = 0;; j++) {
+				std::ofstream outf;
+				char unique_file[50];
+				sprintf(unique_file, "%s%04d.txt", filename.c_str(), j);
+				outf.open(unique_file);
+				sendBytes("C", 1);
+				// Take five measurements then change the file
+				for (int i = 0; i < 5; i++) {
+					char buf[256];
+					// Wait for data to come through
+					while (1) {
+						int n = getBytes(buf, 255);
+						if (n > 0) {
+							buf[n] = '\0';
+							pipes.binwrite(buf, n);
+							outf << buf << std::endl;
+							sendBytes("N", 1);
+						}
 					}
 				}
-				// Restrict measurements to required rate
-				while (tmr.elapsed() < intv) {
-					std::this_thread::sleep_for(std::chrono::milliseconds(10));
-				}
-				sendBytes("N", 1);
 			}
+		} else {
+			return pipes;
 		}
-	} else {
-		close(dataPipe[1]);
-		return dataPipe[0];
+	} catch (PipeException e) {
+		sendBytes("S", 1);
+		fprintf(stdout, "%s\n", e.what());
+		close(uart_filestream);
+		exit(0);
+	} catch (...) {
+		perror("ERROR with ImP");
+		close(uart_filestream);
+		exit(1);
 	}
-	return -1; // This should never happen.
 }
 
 int UART::stopDataCollection() {

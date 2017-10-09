@@ -16,6 +16,7 @@
 #include "camera/camera.h"
 #include "UART/UART.h"
 #include "Ethernet/Ethernet.h"
+#include "pipes/pipes.h"
 
 #include <wiringPi.h>
 
@@ -33,13 +34,27 @@ PiCamera Cam = PiCamera();
 // Setup for the UART communications
 int baud = 230400;
 UART ImP = UART();
-int ImP_data_stream;
+Pipe ImP_stream;
 
 // Ethernet communication setup and variables (we are acting as client)
 int port_no = 31415; // Random unused port for communication
-int ethernet_streams[2]; // 0 = read, 1 = write
+Pipe ethernet_stream;
 Server ethernet_comms = Server(port_no);
 int ALIVE = 2;
+
+void signal_handler(int s) {
+	fprintf(stdout, "Caught signal %d\n"
+			"Ending child processes...", s);
+	Cam.stopVideo();
+	if (&ethernet_stream != NULL) {
+		delay(100);
+		ethernet_stream.close_pipes();
+	}
+	if (&ImP_stream != NULL)
+		ImP_stream.close_pipes();
+	fprintf(stdout, "Child processes closed, exiting program\n");
+	exit(1); // This was an unexpected end so we will exit with an error!
+}
 
 int SODS_SIGNAL() {
 	/*
@@ -49,9 +64,12 @@ int SODS_SIGNAL() {
 	 * directory.
 	 */
 	fprintf(stdout, "Signal Received: SODS\n");
-	fflush(stdout);
 	Cam.stopVideo();
-	ImP.stopDataCollection();
+	//ImP.stopDataCollection();
+	ethernet_stream.strwrite("EXIT");
+	delay(100);
+	ethernet_stream.close_pipes();
+	ImP_stream.close_pipes();
 	return 0;
 }
 
@@ -66,36 +84,51 @@ int SOE_SIGNAL() {
 	 */
 	fprintf(stdout, "Signal Received: SOE\n");
 	// Setup the ImP and start requesting data
-	ImP_data_stream = ImP.startDataCollection("Docs/Data/Pi2/test");
+	ImP_stream = ImP.startDataCollection("Docs/Data/Pi2/test");
 	char buf[256]; // Buffer for reading data from the IMU stream
 	// Trigger the burn wire!
 	digitalWrite(BURNWIRE, 1);
 	unsigned int start = millis();
+	fprintf(stdout, "Triggering burn wire...");
+	fflush(stdout);
 	while (1) {
 		unsigned int time = millis() - start;
-		fprintf(stdout, "Burn wire on for %d ms\n", time);
+		fprintf(stdout, "%d ms ", time);
+		fflush(stdout);
 		if (time > 6000) break;
-		int n = read(ImP_data_stream, buf, 255);
+		// Get ImP data
+		int n = ImP_stream.binread(buf, 255);
 		if (n > 0) {
 			buf[n] = '\0';
 			fprintf(stdout, "DATA: %s\n", buf);
-			write(ethernet_streams[1], buf, n);
+			ethernet_stream.binwrite(buf, n);
 		}
 		delay(100);
 	}
 	digitalWrite(BURNWIRE, 0);
 
 	// Wait for the next signal to continue the program
-	while (digitalRead(SODS)) {
+	bool signal_recieved = false;
+	while (!signal_recieved) {
+		delay(10);
+		// Implements a loop to ensure SODS signal has actually been received
+		if (!digitalRead(SODS)) {
+			int count = 0;
+			for (int i = 0; i < 5; i++) {
+				count += !digitalRead(SODS);
+				delayMicroseconds(200);
+			}
+			if (count >= 3) signal_recieved = true;
+		}
+
 		// Read data from IMU_data_stream and echo it to Ethernet
 		char buf[256];
-		int n = read(ImP_data_stream, buf, 255);
+		int n = ImP_stream.binread(buf, 255);
 		if (n > 0) {
 			buf[n] = '\0';
-			fprintf(stdout, "DATA: %s\n", buf); // TODO change to send to RXSM
-			write(ethernet_streams[1], buf, n);
+			fprintf(stdout, "DATA: %s\n", buf);
+			ethernet_stream.binwrite(buf, n);
 		}
-		delay(100);
 	}
 	return SODS_SIGNAL();
 }
@@ -111,9 +144,19 @@ int LO_SIGNAL() {
 	// Poll the SOE pin until signal is received
 	// TODO implement check to make sure no false signals!
 	fprintf(stdout, "Waiting for SOE signal...\n");
-	while (digitalRead(SOE)) {
-		// TODO implement RXSM communications
+	bool signal_received = false;
+	while (!signal_received) {
 		delay(10);
+		// Implements a loop to ensure LO signal has actually been received
+		if (!digitalRead(SOE)) {
+			int count = 0;
+			for (int i = 0; i < 5; i++) {
+				count += !digitalRead(SOE);
+				delayMicroseconds(200);
+			}
+			if (count >= 3) signal_received = true;
+		}
+		// TODO Implement communications with RXSM
 	}
 	return SOE_SIGNAL();
 }
@@ -144,21 +187,21 @@ int main() {
 
 	// Setup server and wait for client
 	digitalWrite(ALIVE, 1);
-	ethernet_comms.run(ethernet_streams);
+	ethernet_stream = ethernet_comms.run();
 	fprintf(stdout, "Waiting for LO signal...\n");
 
 	// Check for LO signal.
-	bool signal_recieved = false;
-	while (!signal_recieved) {
+	bool signal_received = false;
+	while (!signal_received) {
 		delay(10);
 		// Implements a loop to ensure LO signal has actually been received
-		if (digitalRead(LO)) {
+		if (!digitalRead(LO)) {
 			int count = 0;
 			for (int i = 0; i < 5; i++) {
-				count += digitalRead(LO);
+				count += !digitalRead(LO);
 				delayMicroseconds(200);
 			}
-			if (count >= 3) signal_recieved = true;
+			if (count >= 3) signal_received = true;
 		}
 		// TODO Implement communications with RXSM
 	}
